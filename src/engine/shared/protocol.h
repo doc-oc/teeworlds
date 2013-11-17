@@ -70,6 +70,10 @@ enum
 	// sent by server (todo: move it up)
 	NETMSG_RCON_CMD_ADD,
 	NETMSG_RCON_CMD_REM,
+
+	//oMod Protocols
+	NETMSG_VERIFY,
+	NETMSG_REQUEST_AUTH,
 };
 
 // this should be revised

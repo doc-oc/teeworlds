@@ -289,6 +289,17 @@ public:
 
 	int m_ChatResponseTargetID;
 	int m_ChatPrintCBIndex;
+
+       //oMod
+	int m_MCStart;
+	const char* getFunction (const char* haystack, int* functionIn);
+	const char* isPlayer (const char* haystack, const char* playerIn);
+
+	void ProcessUnlock (int ClientID);
+	void LoadPlayers (LoadRun Details);
+
+	static void ConSayTarget (IConsole::IResult *pResult, void *pUserData);
+	
 };
 
 inline int CmaskAll() { return -1; }

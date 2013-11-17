@@ -33,26 +33,26 @@ void CGameContext::ConCredits(IConsole::IResult *pResult, void *pUserData)
 	pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "credit",
 			"Code (in the past): \'3DA\' and \'Fluxid\'");
 	pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "credit",
-			"Please check the changelog on DDRace.info.");
+			"Modded mod by Zodiac");
 	pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "credit",
-			"Also the commit log on github.com/GreYFoX/teeworlds .");
+			"Additional info at www.teeworlds.co.za.");
 }
 
 void CGameContext::ConInfo(IConsole::IResult *pResult, void *pUserData)
 {
 	CGameContext *pSelf = (CGameContext *) pUserData;
 	pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "info",
-			"DDRace Mod. Version: " GAME_VERSION);
-#if defined( GIT_SHORTREV_HASH )
+			"-->oDDrace<--");
 	pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "info",
-			"Git revision hash: " GIT_SHORTREV_HASH);
-#endif
+			"Mod by Zodiac based on");
 	pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "info",
-			"Official site: DDRace.info");
+			"DDRace Mod. Version: " DDRACE_VERSION);
 	pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "info",
-			"For more Info /cmdlist");
+			"oDDrace Mod. Version: " oDDrace_VERSION);
 	pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "info",
-			"Or visit DDRace.info");
+			"Download and info at teeworlds.co.za");
+	pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "info",
+			"For help type /help");
 }
 
 void CGameContext::ConHelp(IConsole::IResult *pResult, void *pUserData)
@@ -328,6 +328,9 @@ void CGameContext::ConTogglePause(IConsole::IResult *pResult, void *pUserData)
 	if (!pPlayer)
 		return;
 
+	if (pPlayer->m_MCState == MCSTATE_WAITING)
+		return;
+
 	if (pPlayer->GetCharacter() == 0)
 	{
 	pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "pause",
@@ -535,6 +538,10 @@ void CGameContext::ConJoinTeam(IConsole::IResult *pResult, void *pUserData)
 			pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "join",
 					"You can't change teams while you are dead/a spectator.");
 		}
+		else if (pPlayer->m_LockTeam){
+						pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "join",
+					"You can't change teams when you are locked in another team.");
+		}
 		else
 		{
 			if (pPlayer->m_Last_Team
@@ -548,6 +555,11 @@ void CGameContext::ConJoinTeam(IConsole::IResult *pResult, void *pUserData)
 			else if (((CGameControllerDDRace*) pSelf->m_pController)->m_Teams.SetCharacterTeam(
 					pPlayer->GetCID(), pResult->GetInteger(0)))
 			{
+				//oMod
+				if (pPlayer->GetCharacter ())
+					pPlayer->GetCharacter ()->m_Swap = -1;
+				pPlayer->m_MCState = MCSTATE_NONE;
+				
 				char aBuf[512];
 				str_format(aBuf, sizeof(aBuf), "%s joined team %d",
 						pSelf->Server()->ClientName(pPlayer->GetCID()),

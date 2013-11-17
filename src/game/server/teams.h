@@ -16,7 +16,7 @@ class CGameTeams
 public:
 	enum
 	{
-		TEAMSTATE_EMPTY, TEAMSTATE_OPEN, TEAMSTATE_STARTED, TEAMSTATE_FINISHED
+		TEAMSTATE_EMPTY, TEAMSTATE_OPEN, TEAMSTATE_STARTED, TEAMSTATE_FINISHED, TEAMSTATE_LOCKED //oMod	
 	};
 
 	CTeamsCore m_Core;
@@ -85,6 +85,16 @@ public:
 		return m_TeamState[Team];
 	}
 	;
+        
+        //oMod
+	bool m_TeamLocked [MAX_CLIENTS];
+	void SetMCTeams (bool isFirst);
+	void SetLockedTeam (int ClientID);
+	void StartPlayer (int ClientID, int Time, int Team);
+	void ChangeTeamLocked (int Team, bool LockedState);
+	int NumberOfLocked (int Team);
+	bool GetTeamLocked (int Team);
+	void StartLockedPlayers (int ClientID, int Time);
 };
 
 #endif

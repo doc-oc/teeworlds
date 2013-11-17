@@ -96,6 +96,11 @@ public:
 		int m_Max;
 	} m_Latency;
 
+	//oMod
+	int m_MCState;
+	int m_LockTeam;
+
+	void SpawnAtPos (vec2 Pos);
 private:
 	CCharacter *m_pCharacter;
 	CGameContext *m_pGameServer;

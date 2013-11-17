@@ -41,6 +41,10 @@ CPlayer::CPlayer(CGameContext *pGameServer, int ClientID, int Team)
 	m_EyeEmote = true;
 	m_TimerType = g_Config.m_SvDefaultTimerType;
 	m_DefEmote = EMOTE_NORMAL;
+	//oMod
+	m_MCState = MCSTATE_NONE;
+	m_LockTeam = 0;
+
 
 	//New Year
 	if (g_Config.m_SvEvents)
@@ -143,6 +147,10 @@ void CPlayer::Tick()
 					if((!m_pCharacter->GetWeaponGot(WEAPON_NINJA) || m_pCharacter->m_FreezeTime) && m_pCharacter->IsGrounded() && m_pCharacter->m_Pos == m_pCharacter->m_PrevPos)
 						ProcessPause();
 				}
+				else if (m_MCState == MCSTATE_WAITING && m_NextPauseTick < Server()->Tick()){
+					if((!m_pCharacter->GetWeaponGot(WEAPON_NINJA) || m_pCharacter->m_FreezeTime) && m_pCharacter->IsGrounded())
+						ProcessPause();
+				}
 				else if(m_NextPauseTick < Server()->Tick())
 				{
 					ProcessPause();
@@ -198,6 +206,13 @@ void CPlayer::Snap(int SnappingClient)
 	if(!pClientInfo)
 		return;
 
+	//oMod
+	if (Server ()->isVeteran (SnappingClient) && Server ()->isTrial (m_ClientID) ){
+		char aBuf [64];
+		str_format(aBuf, sizeof(aBuf), "[T]%s", Server()->ClientName(m_ClientID));
+		StrToInts(&pClientInfo->m_Name0, 4, aBuf);
+	}
+	else
 	StrToInts(&pClientInfo->m_Name0, 4, Server()->ClientName(m_ClientID));
 	StrToInts(&pClientInfo->m_Clan0, 3, Server()->ClientClan(m_ClientID));
 	pClientInfo->m_Country = Server()->ClientCountry(m_ClientID);
@@ -251,7 +266,7 @@ void CPlayer::OnDisconnect(const char *pReason)
 		GameServer()->SendChat(-1, CGameContext::CHAT_ALL, aBuf);
 
 		str_format(aBuf, sizeof(aBuf), "leave player='%d:%s'", m_ClientID, Server()->ClientName(m_ClientID));
-		GameServer()->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "game", aBuf);
+		GameServer()->Console()->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "game", aBuf);
 	}
 
 	CGameControllerDDRace* Controller = (CGameControllerDDRace*)GameServer()->m_pController;
@@ -452,16 +467,21 @@ bool CPlayer::AfkTimer(int NewTargetX, int NewTargetY)
 void CPlayer::ProcessPause()
 {
 	char aBuf[128];
-	if(m_Paused >= PAUSED_PAUSED)
+	if(m_Paused >= PAUSED_PAUSED || m_MCState == MCSTATE_WAITING)
 	{
 		if(!m_pCharacter->IsPaused())
 		{
 			m_pCharacter->Pause(true);
-			str_format(aBuf, sizeof(aBuf), (m_Paused == PAUSED_PAUSED) ? "'%s' paused" : "'%s' was force-paused for %ds", Server()->ClientName(m_ClientID), m_ForcePauseTime/Server()->TickSpeed());
-			GameServer()->SendChat(-1, CGameContext::CHAT_ALL, aBuf);
 			GameServer()->CreateDeath(m_pCharacter->m_Pos, m_ClientID, m_pCharacter->Teams()->TeamMask(m_pCharacter->Team(), -1, m_ClientID));
-			GameServer()->CreateSound(m_pCharacter->m_Pos, SOUND_PLAYER_DIE, m_pCharacter->Teams()->TeamMask(m_pCharacter->Team(), -1, m_ClientID));
 			m_NextPauseTick = Server()->Tick() + g_Config.m_SvPauseFrequency * Server()->TickSpeed();
+			if (m_Paused >= PAUSED_PAUSED){
+				str_format(aBuf, sizeof(aBuf), (m_Paused == PAUSED_PAUSED) ? "'%s' paused" : "'%s' was force-paused for %ds", Server()->ClientName(m_ClientID), m_ForcePauseTime/Server()->TickSpeed());
+				GameServer()->SendChat(-1, CGameContext::CHAT_ALL, aBuf);
+				GameServer()->CreateSound(m_pCharacter->m_Pos, SOUND_PLAYER_DIE, m_pCharacter->Teams()->TeamMask(m_pCharacter->Team(), -1, m_ClientID));
+			}
+			else
+				m_pCharacter->m_MCTimeRemove = Server()->Tick ();
+			m_Paused = PAUSED_PAUSED;
 		}
 	}
 	else
@@ -469,10 +489,12 @@ void CPlayer::ProcessPause()
 		if(m_pCharacter->IsPaused())
 		{
 			m_pCharacter->Pause(false);
-			str_format(aBuf, sizeof(aBuf), "'%s' resumed", Server()->ClientName(m_ClientID));
-			GameServer()->SendChat(-1, CGameContext::CHAT_ALL, aBuf);
 			GameServer()->CreatePlayerSpawn(m_pCharacter->m_Pos, m_pCharacter->Teams()->TeamMask(m_pCharacter->Team(), -1, m_ClientID));
 			m_NextPauseTick = Server()->Tick() + g_Config.m_SvPauseFrequency * Server()->TickSpeed();
+			if (m_MCState != MCSTATE_STARTED){
+			str_format(aBuf, sizeof(aBuf), "'%s' resumed", Server()->ClientName(m_ClientID));
+			GameServer()->SendChat(-1, CGameContext::CHAT_ALL, aBuf);
+			}
 		}
 	}
 }
@@ -482,4 +504,19 @@ bool CPlayer::IsPlaying()
 	if(m_pCharacter && m_pCharacter->IsAlive())
 		return true;
 	return false;
+}
+
+
+//oMod
+void CPlayer::SpawnAtPos (vec2 SpawnPos){
+	if(m_pCharacter)
+	{
+		m_pCharacter->Die(m_ClientID, WEAPON_GAME);
+		delete m_pCharacter;
+		m_pCharacter = 0;
+	}
+
+	m_pCharacter = new(m_ClientID) CCharacter(&GameServer()->m_World);
+	m_pCharacter->Spawn(this, SpawnPos);
+	GameServer()->CreatePlayerSpawn(SpawnPos, m_pCharacter->Teams()->TeamMask(m_pCharacter->Team(), -1, m_ClientID));
 }

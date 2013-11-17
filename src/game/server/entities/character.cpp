@@ -764,6 +764,29 @@ bool CCharacter::IncreaseArmor(int Amount)
 
 void CCharacter::Die(int Killer, int Weapon)
 {
+	//oMod
+	if (m_pPlayer->m_LockTeam &&  !(Teams ()->GetTeamLocked (m_pPlayer->m_LockTeam)))
+		m_pPlayer->m_LockTeam = 0;
+	
+	if (m_pPlayer->m_MCState >= MCSTATE_WAITING){
+		if (m_pPlayer->m_Paused)
+			m_pPlayer->m_Paused = 0;
+		if (m_pPlayer->m_MCState >= MCSTATE_STARTED){
+			m_pPlayer->m_MCState = MCSTATE_OPTED;
+			m_MCTimeRemove = 0;
+			for (int i = 0; i < MAX_CLIENTS; ++i){
+				if (Teams ()->m_Core.Team(m_pPlayer->GetCID()) == Teams ()->m_Core.Team(i) && i != m_pPlayer->GetCID()){
+					CPlayer* pPlayer = GameServer()->m_apPlayers[i];
+					if (pPlayer && pPlayer->m_MCState > MCSTATE_OPTED){
+						pPlayer->KillCharacter(WEAPON_GAME);
+						GameServer ()->SendChatTarget (i, "Your partner killed.");
+					}
+				}
+			}
+		}
+		else
+			m_pPlayer->m_MCState = MCSTATE_OPTED;
+	}
 	// we got to wait 0.5 secs before respawning
 	m_pPlayer->m_RespawnTick = Server()->Tick()+Server()->TickSpeed()/2;
 	int ModeSpecial = GameServer()->m_pController->OnCharacterDeath(this, GameServer()->m_apPlayers[Killer], Weapon);
@@ -792,7 +815,11 @@ void CCharacter::Die(int Killer, int Weapon)
 	GameServer()->m_World.RemoveEntity(this);
 	GameServer()->m_World.m_Core.m_apCharacters[m_pPlayer->GetCID()] = 0;
 	GameServer()->CreateDeath(m_Pos, m_pPlayer->GetCID(), Teams()->TeamMask(Team(), -1, m_pPlayer->GetCID()));
-	Teams()->OnCharacterDeath(GetPlayer()->GetCID());
+    Teams()->OnCharacterDeath(GetPlayer()->GetCID());
+
+     //oMod	
+    if ( m_pPlayer->m_LockTeam &&  Teams ()->GetTeamLocked (Teams ()->m_Core.Team(m_pPlayer->GetCID())) && m_pPlayer->m_MCState < MCSTATE_WAITING)
+		Teams()->SetForceCharacterTeam(m_pPlayer->GetCID(), Teams ()->m_Core.Team(m_pPlayer->GetCID()));
 }
 
 bool CCharacter::TakeDamage(vec2 Force, int Dmg, int From, int Weapon)
@@ -1617,6 +1644,7 @@ void CCharacter::DDRaceInit()
 {
 	m_Paused = false;
 	m_DDRaceState = DDRACE_NONE;
+	m_Swap = -1;
 	m_PrevPos = m_Pos;
 	m_LastBroadcast = 0;
 	m_TeamBeforeSuper = 0;

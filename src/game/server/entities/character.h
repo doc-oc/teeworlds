@@ -212,6 +212,11 @@ public:
 	int m_TileSFlagsB;
 	vec2 m_Intersection;
 	int64 m_LastStartWarning;
+        
+    //oMod
+    int m_Swap;
+	int m_MCTimeRemove;
+
 	// Setters/Getters because i don't want to modify vanilla vars access modifiers
 	int GetLastWeapon() { return m_LastWeapon; };
 	void SetLastWeapon(int LastWeap) {m_LastWeapon = LastWeap; };
@@ -223,6 +228,7 @@ public:
 	CCharacterCore GetCore() { return m_Core; };
 	void SetCore(CCharacterCore Core) {m_Core = Core; };
 	CCharacterCore* Core() { return &m_Core; };
+	
 	bool GetWeaponGot(int Type) { return m_aWeapons[Type].m_Got; };
 	void SetWeaponGot(int Type, bool Value) { m_aWeapons[Type].m_Got = Value; };
 	int GetWeaponAmmo(int Type) { return m_aWeapons[Type].m_Ammo; };
@@ -240,7 +246,9 @@ enum
 	DDRACE_NONE = 0,
 	DDRACE_STARTED,
 	DDRACE_CHEAT, // no time and won't start again unless ordered by a mod or death
-	DDRACE_FINISHED
+	DDRACE_FINISHED,
+	MCSTATE_NONE = 0, MCSTATE_OPTED, MCSTATE_WAITING, MCSTATE_STARTED//oMod
+
 };
 
 #endif

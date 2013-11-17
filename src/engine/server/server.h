@@ -17,6 +17,8 @@
 #include <engine/shared/econ.h>
 #include <engine/shared/netban.h>
 
+#include "oMod.h"
+
 class CSnapIDPool
 {
 	enum
@@ -83,6 +85,9 @@ public:
 	enum
 	{
 		AUTHED_NO=0,
+		AUTHED_TRIAL,
+		AUTHED_MEMBER,
+		AUTHED_VETERAN,
 		AUTHED_MOD,
 		AUTHED_ADMIN,
 
@@ -98,6 +103,7 @@ public:
 			STATE_EMPTY = 0,
 			STATE_AUTH,
 			STATE_CONNECTING,
+			STATE_AUTHENICATING,
 			STATE_READY,
 			STATE_INGAME,
 
@@ -132,6 +138,16 @@ public:
 		int m_Score;
 		int m_Authed;
 		int m_AuthTries;
+
+		//oMod
+		char m_Username [MAX_NAME_LENGTH];
+		char m_Clan[MAX_CLAN_LENGTH];
+		char m_StartTime [80];
+		int m_OnlineID;
+		int m_Infractions;
+		int m_Rank;
+		
+		bool m_Registered;
 
 		const IConsole::CCommandInfo *m_pRconCmdToSend;
 
@@ -255,6 +271,46 @@ public:
 	int m_aPrevStates[MAX_CLIENTS];
 	char *GetAnnouncementLine(char const *FileName);
 	unsigned m_AnnouncementLastLine;
+
+	//oMod
+	int m_MapMin;
+	DBConnector *m_DBConnector;
+	CWordList *m_lastIWord; 
+	CWordList *m_lastSWord; 
+
+	void RequestAuth(int ClientID);
+	bool isGuest (int ClientID); 
+	bool isTrial (int ClientID); 
+	bool isVeteran (int ClientID);
+	void ReplaceWords (char *pMsgIn, char replaceWith, bool incPunct);
+	int GetOnlineID(int ClientID);
+	int GetMapMin ();
+	int GetClientsRank (int ClientID);
+	int GetRegistered (int ClientID);
+
+	
+	void ImportedCommands (const char* ServerName, const char *Commands, int LogID);
+	void SetClientOnlineDetails (int OnlineID, int ClientID, int Auth, const char * Username, const char * Clan, int Rank, bool Registered, int Infractions);
+	void PlayersRank (int ClientID, int Rank);
+	void RemoveG (IConsole::IResult *pResult, void *pUser);
+	void SendPLog (int OnlineID, const char *Category, const char * Name, const char * Text);
+	void SendSLog (const char *Category, const char * Text);
+    void SendCommendation (int ClientID, int CommendID);
+	void SendAdminNotification (int OnlineID, const char * Username, const char * Reason);
+	void GetRank (int ClientID);
+	void SendBug (int OnlineID, const char * Report);
+	void SendRating (int ClientID, int Score);
+	void AddRecord (int OnlineID, float Time, bool MapChallenge);
+	void SendSave (SaveRun SaveDetails);
+	void FetchSave (int CLientID, const int *OnlineIDs, int Size);
+	void LoadSave (LoadRun SaveDetails);
+
+	static void ConConnect (IConsole::IResult *pResult, void *pUser);
+    static void ConMapMin (IConsole::IResult *pResult, void *pUser);
+	static void ConAddWord(IConsole::IResult *pResult, void *pUser);
+	static void ConAddIdentifier(IConsole::IResult *pResult, void *pUser);
+	static void ConGetUsername (IConsole::IResult *pResult, void *pUser);
+	
 };
 
 #endif

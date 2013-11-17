@@ -4,6 +4,7 @@
 #define ENGINE_SERVER_H
 #include "kernel.h"
 #include "message.h"
+#include <engine/server/msgStruct.hpp>
 
 class IServer : public IInterface
 {
@@ -70,6 +71,31 @@ public:
 	// DDRace
 
 	virtual void GetClientAddr(int ClientID, NETADDR *pAddr) = 0;
+	
+	//oMod
+	virtual void ImportedCommands (const char* ServerName, const char *Commands, int LogID) = 0;
+	virtual void SetClientOnlineDetails (int OnlineID, int ClientID, int Auth, const char * Username, const char * Clan, int Rank, bool Registered, int Infractions) = 0;
+	virtual void PlayersRank (int ClientID, int Rank) = 0;
+	virtual	bool isGuest (int ClientID) = 0;
+	virtual bool isTrial (int ClientID) = 0;
+	virtual bool isVeteran(int ClientID) = 0; 
+
+	virtual void ReplaceWords (char *pMsgIn, char replaceWith, bool incPunct) = 0; 
+	virtual int GetOnlineID(int ClientID) = 0;
+	virtual int GetMapMin () = 0;
+	virtual int GetClientsRank (int ClientID) = 0;
+	virtual int GetRegistered (int ClientID) = 0;
+	virtual void SendPLog (int OnlineID, const char *Category, const char * Name, const char * Text) = 0;
+	virtual void SendSLog (const char *Category, const char * Text) = 0;
+	virtual void SendCommendation (int ClientID, int CommendID)= 0;
+	virtual void SendAdminNotification (int OnlineID, const char * Username, const char * Reason)= 0;
+	virtual void GetRank (int ClientID)= 0;
+	virtual void SendBug (int OnlineID, const char * Report)= 0;
+	virtual void SendRating (int ClientID, int Score)= 0;
+	virtual void AddRecord (int OnlineID, float Time, bool MapChallenge)= 0;
+	virtual void SendSave (SaveRun SaveDetails)=0;
+	virtual void FetchSave (int ClientID, const int *OnlineIDs, int Size)=0;
+	virtual void LoadSave (LoadRun SaveDetails)=0;
 };
 
 class IGameServer : public IInterface
@@ -104,6 +130,9 @@ public:
 	// DDRace
 
 	virtual void OnSetAuthed(int ClientID, int Level) = 0;
+
+	//oMod
+	virtual void LoadPlayers (LoadRun Details) = 0;
 };
 
 extern IGameServer *CreateGameServer();

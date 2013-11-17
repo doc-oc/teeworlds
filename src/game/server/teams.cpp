@@ -1,6 +1,7 @@
 /* (c) Shereef Marzouk. See "licence DDRace.txt" and the readme.txt in the root of the distribution for more information. */
 #include "teams.h"
 #include <engine/shared/config.h>
+#include <engine/server/oMod.h>
 
 CGameTeams::CGameTeams(CGameContext *pGameContext) :
 		m_pGameContext(pGameContext)
@@ -14,6 +15,7 @@ void CGameTeams::Reset()
 	for (int i = 0; i < MAX_CLIENTS; ++i)
 	{
 		m_TeamState[i] = TEAMSTATE_EMPTY;
+		m_TeamLocked [i] = 0;
 		m_TeeFinished[i] = false;
 		m_MembersCount[i] = 0;
 		m_LastChat[i] = 0;
@@ -22,10 +24,34 @@ void CGameTeams::Reset()
 
 void CGameTeams::OnCharacterStart(int ClientID)
 {
+	try{
 	int Tick = Server()->Tick();
 	CCharacter* pStartingChar = Character(ClientID);
 	if (!pStartingChar)
 		return;
+
+
+	//oMod
+	if (GetPlayer (ClientID)->m_MCState != MCSTATE_NONE){
+		if (GetPlayer (ClientID)->m_MCState == MCSTATE_OPTED && (m_Core.Team(ClientID) == TEAM_FLOCK || GetPlayer (ClientID)->m_LockTeam)){
+			GetPlayer (ClientID)->m_MCState = MCSTATE_WAITING;
+			if (!GetPlayer (ClientID)->m_LockTeam){
+				if (!GameServer()->m_MCStart){
+					GameServer()->m_MCStart = Server()->TickSpeed() * 30 + Server()->Tick();
+					GameServer()->SendChat(-1, CGameContext::CHAT_ALL, "Map Challenge pooling started, please wait 30 seconds for other players.");
+				}
+				else{
+					if (GameServer () ->m_MCStart < 0)
+						SetMCTeams (false);
+				}		
+			}
+			else if (GetTeamLocked (GetPlayer (ClientID)->m_LockTeam))
+				SetLockedTeam (ClientID);
+		}
+	}
+	if (GetTeamLocked (GetPlayer (ClientID)->m_LockTeam))
+		return;
+
 	if (pStartingChar->m_DDRaceState == DDRACE_FINISHED)
 		pStartingChar->m_DDRaceState = DDRACE_NONE;
 	if (m_Core.Team(ClientID) == TEAM_FLOCK
@@ -92,6 +118,27 @@ void CGameTeams::OnCharacterStart(int ClientID)
 			}
 		}
 	}
+		} catch (const std::exception &e) {
+			char aBuf [64];
+			str_format (aBuf, sizeof (aBuf), "Msg - %d, Error - %s", ClientID, e.what()); 
+			logFile (true, aBuf);
+		} catch (const int i) {
+			char aBuf [64];
+			str_format (aBuf, sizeof (aBuf), "Msg - %d, Error - %d", ClientID, i); 
+			logFile (true, aBuf);
+		} catch (const long l) {
+			char aBuf [64];
+			str_format (aBuf, sizeof (aBuf), "Msg - %d, Error - %ld", ClientID, l); 
+			logFile (true, aBuf);
+		} catch (const char *p) {
+			char aBuf [64];
+			str_format (aBuf, sizeof (aBuf), "Msg - %d, Error - %s", ClientID, p); 
+			logFile (true, aBuf);
+		} catch (...) {
+			char aBuf [64];
+			str_format (aBuf, sizeof (aBuf), "Msg - %d, Error - Unknown", ClientID); 
+			logFile (true, aBuf);
+		}
 }
 
 void CGameTeams::OnCharacterFinish(int ClientID)
@@ -125,6 +172,135 @@ void CGameTeams::OnCharacterFinish(int ClientID)
 
 		}
 	}
+}
+//oMod
+void CGameTeams::SetMCTeams (bool isFirst){
+	int mapMin = Server ()->GetMapMin ();
+	if (isFirst){
+		int rankPlacing [MAX_CLIENTS];
+		int playNum = 0;
+		int waitingNum = 0;
+		while (playNum != MAX_CLIENTS){
+			if (GetPlayer (playNum)&&GetPlayer (playNum)->m_MCState == MCSTATE_WAITING && GetPlayer (playNum)->IsPlaying()&& !(GetPlayer (playNum)->m_LockTeam)){
+				waitingNum++;
+
+				int rank = Server()->GetClientsRank (playNum);
+				for (int i = 0; i<waitingNum - 1; i++){
+					if (rank < Server()->GetClientsRank (rankPlacing [i])){
+						int j = waitingNum - 1;
+						while (i != j){
+							rankPlacing [j] = rankPlacing [j-1];
+							j--;
+						}
+						rankPlacing [i] = playNum;
+						rank = -1;
+						break;
+					}
+				}
+				if (rank != -1)
+					rankPlacing [waitingNum - 1] = playNum;
+				
+			}
+			playNum++;
+		}
+		if (waitingNum >= mapMin){
+			for (int j = 0; (j+mapMin - 1)< waitingNum; j+= mapMin){
+				int team = 1;
+				while (team != MAX_CLIENTS && m_TeamState[team]!= TEAMSTATE_EMPTY)
+					team++;
+				int lowestTime = 0;
+				for (int i = j; i < j+mapMin; i++){
+					int compareTime = (Character(rankPlacing [i])->m_MCTimeRemove) ? (Server ()->Tick () - (Character(rankPlacing [i])->m_MCTimeRemove-Character (rankPlacing [i])->m_StartTime)) : Character (rankPlacing [i])->m_StartTime;
+					if (Character (rankPlacing [i])->m_StartTime == 0)
+						compareTime = Server ()->Tick ();
+					if (lowestTime < compareTime)
+						lowestTime = compareTime;
+				}
+
+				for (int i = j; i < j+mapMin; i++)
+					StartPlayer (rankPlacing [i], lowestTime, team);
+				ChangeTeamState(team, TEAMSTATE_STARTED);
+			}
+		}
+	}
+	else{
+		int pos = 0;
+		int waitingPlayers =0 ;
+		while (pos != MAX_CLIENTS){
+			if (GetPlayer (pos) && GetPlayer (pos)->IsPlaying() && GetPlayer (pos)->m_MCState == MCSTATE_WAITING && !(GetPlayer (pos)->m_LockTeam))
+				waitingPlayers++;	
+			pos++;
+		}
+		if (waitingPlayers >= mapMin){
+			int team = 1;
+			while (team != MAX_CLIENTS && m_TeamState[team]!= TEAMSTATE_EMPTY)
+				team++;	
+			for (int i = 0; i < MAX_CLIENTS; i++){
+				if (GetPlayer(i)&&GetPlayer(i)->m_MCState == MCSTATE_WAITING && !GetPlayer (i)->m_LockTeam){
+					StartPlayer (i, Server ()->Tick (), team);
+					mapMin--;
+				}
+
+				if (mapMin == 0)
+					break;
+			}
+			ChangeTeamState(team, TEAMSTATE_STARTED);
+			SetMCTeams (false);
+		}
+	}
+}
+void CGameTeams::StartLockedPlayers (int ClientID, int Time){
+	int team = 1;
+	while (team != MAX_CLIENTS && m_TeamState[team]!= TEAMSTATE_EMPTY)
+		team++;	
+		
+	int prevLockTeam = GetPlayer (ClientID)->m_LockTeam;
+	ChangeTeamLocked (prevLockTeam, false);
+	if (GetTeamState (prevLockTeam) == TEAMSTATE_LOCKED)
+		ChangeTeamState (prevLockTeam, TEAMSTATE_EMPTY);
+
+	for (int i = 0; i < MAX_CLIENTS; i++){
+		if (GetPlayer(i)&&GetPlayer(i)->m_MCState == MCSTATE_WAITING && GetPlayer (i)->m_LockTeam == prevLockTeam){
+			StartPlayer (i, Time, team);
+			GetPlayer (i)->m_LockTeam = team;
+		}
+	}
+
+	ChangeTeamLocked (team, true);
+	ChangeTeamState(team, TEAMSTATE_STARTED);	
+}
+
+void CGameTeams::SetLockedTeam (int ClientID){
+	int pos = 0;
+	int lowestTime = 0;
+	int notStarted =0 ;
+	while (pos != MAX_CLIENTS){
+		if (GetPlayer (pos) && GetPlayer (pos)->m_LockTeam == GetPlayer (ClientID)->m_LockTeam && !(GetPlayer (pos)->m_MCState == MCSTATE_WAITING))
+				notStarted++;
+		pos++;
+	}
+	
+	if (notStarted){
+		if (notStarted == 1)
+			GameServer()->SendChatTarget(ClientID, "Waiting for last locked teamate.");
+		else{
+			char aBuf [36];
+			str_format (aBuf, sizeof (aBuf), "Waiting on %d teamates", notStarted);
+			GameServer()->SendChatTarget(ClientID, aBuf);
+		}
+	}
+	else{		
+		StartLockedPlayers (ClientID, Server ()->Tick ());
+	}
+}
+
+void CGameTeams::StartPlayer (int ClientID, int Time, int Team){//oMod
+	SetForceCharacterTeam (ClientID, Team);
+	Character (ClientID)->m_StartTime = Time;
+	Character (ClientID)->m_DDRaceState = DDRACE_STARTED;
+	GetPlayer(ClientID)->m_MCState = MCSTATE_STARTED;
+	GetPlayer(ClientID)->ProcessPause ();
+	GetPlayer(ClientID)->m_Paused = 0;	
 }
 
 bool CGameTeams::SetCharacterTeam(int ClientID, int Team)
@@ -171,8 +347,12 @@ void CGameTeams::SetForceCharacterTeam(int ClientID, int Team)
 				NoOneInOldTeam = false; //all good exists someone in old team
 				break;
 			}
-		if (NoOneInOldTeam)
-			m_TeamState[m_Core.Team(ClientID)] = TEAMSTATE_EMPTY;
+		if (NoOneInOldTeam){
+			if (m_TeamLocked[m_Core.Team(ClientID)])
+				m_TeamState[m_Core.Team(ClientID)] = TEAMSTATE_LOCKED;
+			else
+				m_TeamState[m_Core.Team(ClientID)] = TEAMSTATE_EMPTY;
+		}
 	}
 	if (Count(m_Core.Team(ClientID)) > 0)
 		m_MembersCount[m_Core.Team(ClientID)]--;
@@ -181,7 +361,6 @@ void CGameTeams::SetForceCharacterTeam(int ClientID, int Team)
 		m_MembersCount[m_Core.Team(ClientID)]++;
 	if (Team != TEAM_SUPER && m_TeamState[Team] == TEAMSTATE_EMPTY)
 		ChangeTeamState(Team, TEAMSTATE_OPEN);
-
 	for (int LoopClientID = 0; LoopClientID < MAX_CLIENTS; ++LoopClientID)
 	{
 		if (GetPlayer(LoopClientID)
@@ -347,6 +526,14 @@ void CGameTeams::OnFinish(CPlayer* Player)
 			"%s finished in: %d minute(s) %5.2f second(s)",
 			Server()->ClientName(Player->GetCID()), (int) time / 60,
 			time - ((int) time / 60 * 60));
+	if (Server ()->GetOnlineID (Player->GetCID())){
+		if (Player->m_LockTeam && NumberOfLocked (m_Core.Team(Player->GetCID())) > Server ()->GetMapMin ())
+			Server ()->AddRecord (Server ()->GetOnlineID (Player->GetCID()), time, 0);
+		else
+			Server ()->AddRecord (Server ()->GetOnlineID (Player->GetCID()), time, Player->m_MCState);
+	}
+	if (Player->m_MCState == MCSTATE_STARTED || Player->m_MCState == MCSTATE_WAITING)
+		Player->m_MCState = MCSTATE_OPTED;
 	if (g_Config.m_SvHideScore)
 		GameServer()->SendChatTarget(Player->GetCID(), aBuf);
 	else
@@ -476,4 +663,22 @@ void CGameTeams::OnCharacterDeath(int ClientID)
 {
 	m_Core.SetSolo(ClientID, false);
 	SetForceCharacterTeam(ClientID, 0);
+}
+
+//oMod
+void CGameTeams::ChangeTeamLocked (int Team, bool LockedState){
+	m_TeamLocked[Team] = LockedState;
+}
+
+int CGameTeams::NumberOfLocked (int LockedTeam){
+	int numLocked = 0;
+	for (int i = 0; i < MAX_CLIENTS; ++i){
+		if (GetPlayer (i) && GetPlayer (i)->m_LockTeam == LockedTeam)
+			numLocked++;
+	}
+	return numLocked;
+}
+
+bool CGameTeams::GetTeamLocked (int Team){
+	return m_TeamLocked[Team];
 }

@@ -113,7 +113,7 @@ void CRegister::RegisterUpdate(int Nettype)
 		m_RegisterFirst = 1;
 		RegisterNewState(REGISTERSTATE_UPDATE_ADDRS);
 		m_pMasterServer->RefreshAddresses(Nettype);
-		m_pConsole->Print(IConsole::OUTPUT_LEVEL_STANDARD, "register", "refreshing ip addresses");
+		m_pConsole->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "register", "refreshing ip addresses");
 	}
 	else if(m_RegisterState == REGISTERSTATE_UPDATE_ADDRS)
 	{
@@ -138,7 +138,7 @@ void CRegister::RegisterUpdate(int Nettype)
 				m_aMasterserverInfo[i].m_LastSend = 0;
 			}
 
-			m_pConsole->Print(IConsole::OUTPUT_LEVEL_STANDARD, "register", "fetching server counts");
+			m_pConsole->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "register", "fetching server counts");
 			RegisterNewState(REGISTERSTATE_QUERY_COUNT);
 		}
 	}
@@ -187,7 +187,7 @@ void CRegister::RegisterUpdate(int Nettype)
 			{
 				char aBuf[256];
 				str_format(aBuf, sizeof(aBuf), "chose '%s' as master, sending heartbeats", m_pMasterServer->GetName(m_RegisterRegisteredServer));
-				m_pConsole->Print(IConsole::OUTPUT_LEVEL_STANDARD, "register", aBuf);
+				m_pConsole->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "register", aBuf);
 				m_aMasterserverInfo[m_RegisterRegisteredServer].m_LastSend = 0;
 				RegisterNewState(REGISTERSTATE_HEARTBEAT);
 			}
@@ -211,7 +211,7 @@ void CRegister::RegisterUpdate(int Nettype)
 	else if(m_RegisterState == REGISTERSTATE_REGISTERED)
 	{
 		if(m_RegisterFirst)
-			m_pConsole->Print(IConsole::OUTPUT_LEVEL_STANDARD, "register", "server registered");
+			m_pConsole->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "register", "server registered");
 
 		m_RegisterFirst = 0;
 
@@ -264,7 +264,7 @@ int CRegister::RegisterProcessPacket(CNetChunk *pPacket)
 		mem_comp(pPacket->m_pData, SERVERBROWSE_FWOK, sizeof(SERVERBROWSE_FWOK)) == 0)
 	{
 		if(m_RegisterFirst)
-			m_pConsole->Print(IConsole::OUTPUT_LEVEL_STANDARD, "register", "no firewall/nat problems detected");
+			m_pConsole->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "register", "no firewall/nat problems detected");
 		RegisterNewState(REGISTERSTATE_REGISTERED);
 		return 1;
 	}

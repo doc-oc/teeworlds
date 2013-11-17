@@ -214,7 +214,7 @@ int CServerBan::BanExt(T *pBanPool, const typename T::CDataType *pData, int Seco
 			if(Server()->m_aClients[i].m_State == CServer::CClient::STATE_EMPTY)
 				continue;
 
-			if(Server()->m_aClients[i].m_Authed != CServer::AUTHED_NO && NetMatch(pData, Server()->m_NetServer.ClientAddr(i)))
+			if(Server()->m_aClients[i].m_Authed > CServer::AUTHED_TRIAL && NetMatch(pData, Server()->m_NetServer.ClientAddr(i)))
 			{
 				Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "net_ban", "ban error (command denied)");
 				return -1;
@@ -267,13 +267,39 @@ void CServerBan::ConBanExt(IConsole::IResult *pResult, void *pUser)
 	int Minutes = pResult->NumArguments()>1 ? clamp(pResult->GetInteger(1), 0, 44640) : 30;
 	const char *pReason = pResult->NumArguments()>2 ? pResult->GetString(2) : "No reason given";
 
-	if(StrAllnum(pStr))
-	{
-		int ClientID = str_toint(pStr);
+	//oMod Banning
+	int ClientID = -1;
+	if(StrAllnum(pStr)){
+		ClientID = str_toint(pStr);
+		char aAddrStr[NETADDR_MAXSTRSIZE];
+		net_addr_str(pThis->Server()->m_NetServer.ClientAddr(ClientID), aAddrStr, sizeof(aAddrStr), false); 
+
+		ImplementBan banStruct;
+		banStruct.Address = aAddrStr;
+		banStruct.Name = pThis->Server()->m_aClients[ClientID].m_aName;
+		banStruct.Reason = pReason;
+		banStruct.OnlineID = 0;
+
 		if(ClientID < 0 || ClientID >= MAX_CLIENTS || pThis->Server()->m_aClients[ClientID].m_State == CServer::CClient::STATE_EMPTY)
 			pThis->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "net_ban", "ban error (invalid client id)");
-		else
+		else{
+			if (pThis->Server()->m_aClients[ClientID].m_OnlineID > 0 && ClientID < MAX_CLIENTS&& pThis->Server()->m_aClients[ClientID].m_State == CServer::CClient::STATE_INGAME){
+				switch (pThis->Server()->m_aClients[ClientID].m_Infractions){
+					case 0: Minutes = 30;
+						break;
+					case 1: Minutes = 10080;
+						break;
+					case 2: Minutes = 43200;
+						break;
+					case 3: Minutes = 0;
+						break;
+				}
+				banStruct.OnlineID = pThis->Server()->m_aClients[ClientID].m_OnlineID;
+			}
+			banStruct.Minutes = Minutes;
+			pThis->Server()->m_DBConnector->SendMessage (NET_IMPLEMENTBAN, banStruct);
 			pThis->BanAddr(pThis->Server()->m_NetServer.ClientAddr(ClientID), Minutes*60, pReason);
+	}
 	}
 	else
 		ConBan(pResult, pUser);
@@ -312,17 +338,46 @@ CServer::CServer() : m_DemoRecorder(&m_SnapshotDelta)
 	m_RconClientID = IServer::RCON_CID_SERV;
 	m_RconAuthLevel = AUTHED_ADMIN;
 
+	m_MapMin = 2;
+	m_lastIWord = 0;
+	m_lastSWord = 0;
+
 	Init();
 }
 
 
 int CServer::TrySetClientName(int ClientID, const char *pName)
 {
+	char tempName [64];
+	// trim the name
+	str_copy(tempName, pName, sizeof(tempName));
+	//oMod Name Filter
+	ReplaceWords (tempName, ' ', false);
+	
+	
+	if (m_aClients[ClientID].m_Authed < AUTHED_MOD)
+		ReplaceWords (tempName, ' ', true);
+	StrUTF8Ltrim(tempName);
+	StrUTF8Rtrim(tempName);
+	// check for empty names
+	if(!tempName [0])
+		return -1;
+
+
 	char aTrimmedName[64];
 
-	// trim the name
-	str_copy(aTrimmedName, StrUTF8Ltrim(pName), sizeof(aTrimmedName));
-	StrUTF8Rtrim(aTrimmedName);
+	if (m_aClients[ClientID].m_Authed == AUTHED_NO){
+		// make sure that two clients doesn't have the same name
+		for(int i = 0; i < MAX_CLIENTS; i++)
+		if(i != ClientID && m_aClients[i].m_State >= CClient::STATE_READY)
+		{
+			if(str_comp(pName, m_aClients[i].m_aName) == 0)
+				return -1;
+		}
+		str_format(aTrimmedName, sizeof(aTrimmedName), "[G]%s", (const char *) tempName);
+	}
+	else
+		str_copy(aTrimmedName, (const char *) tempName, sizeof(aTrimmedName));
 
 	// check if new and old name are the same
 	if(m_aClients[ClientID].m_aName[0] && str_comp(m_aClients[ClientID].m_aName, aTrimmedName) == 0)
@@ -331,12 +386,19 @@ int CServer::TrySetClientName(int ClientID, const char *pName)
 	char aBuf[256];
 	str_format(aBuf, sizeof(aBuf), "'%s' -> '%s'", pName, aTrimmedName);
 	Console()->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "server", aBuf);
+	SendPLog (m_aClients[ClientID].m_OnlineID, "Name", pName, aBuf);//oMod
+
+	char aAddrStr[NETADDR_MAXSTRSIZE];
+	net_addr_str(m_NetServer.ClientAddr(ClientID), aAddrStr, sizeof(aAddrStr), false);
+	
+	NameInfo nameStruct;
+	nameStruct.OnlineID = m_aClients[ClientID].m_OnlineID;
+	nameStruct.Address = aAddrStr;
+	nameStruct.Name = aTrimmedName;
+
+	m_DBConnector->SendMessage (NET_NAMEINFO, nameStruct);
+
 	pName = aTrimmedName;
-
-
-	// check for empty names
-	if(!pName[0])
-		return -1;
 
 	// make sure that two clients doesn't have the same name
 	for(int i = 0; i < MAX_CLIENTS; i++)
@@ -380,7 +442,8 @@ void CServer::SetClientClan(int ClientID, const char *pClan)
 	if(ClientID < 0 || ClientID >= MAX_CLIENTS || m_aClients[ClientID].m_State < CClient::STATE_READY || !pClan)
 		return;
 
-	str_copy(m_aClients[ClientID].m_aClan, pClan, MAX_CLAN_LENGTH);
+	if (str_length (pClan) > 0)
+		str_copy(m_aClients[ClientID].m_aClan, m_aClients[ClientID].m_Clan, MAX_CLAN_LENGTH);
 }
 
 void CServer::SetClientCountry(int ClientID, int Country)
@@ -415,7 +478,7 @@ void CServer::Kick(int ClientID, const char *pReason)
 		Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "server", "kick command denied");
  		return;
 	}
-
+	SendPLog (ClientID, "Kicked", m_aClients[MAX_CLIENTS].m_aName, pReason); //oMod
 	m_NetServer.Drop(ClientID, pReason);
 }
 
@@ -441,6 +504,13 @@ int CServer::Init()
 		m_aClients[i].m_State = CClient::STATE_EMPTY;
 		m_aClients[i].m_aName[0] = 0;
 		m_aClients[i].m_aClan[0] = 0;
+		m_aClients[i].m_Username[0] = 0;
+		m_aClients[i].m_Clan[0] = 0;
+		m_aClients[i].m_StartTime [0] = 0;
+		m_aClients[i].m_OnlineID = 0;
+		m_aClients[i].m_Infractions = 0;
+		m_aClients[i].m_Rank = 0;
+		m_aClients[i].m_Registered = 0;
 		m_aClients[i].m_Country = -1;
 		m_aClients[i].m_Snapshots.Init();
 	}
@@ -459,8 +529,11 @@ void CServer::SetRconCID(int ClientID)
 }
 
 bool CServer::IsAuthed(int ClientID)
-{
-	return m_aClients[ClientID].m_Authed;
+{//oMod: Changed definition of admin
+	if (m_aClients[ClientID].m_Authed >= AUTHED_MOD)
+		return true;
+	else
+		return false;
 }
 
 int CServer::GetClientInfo(int ClientID, CClientInfo *pInfo)
@@ -714,10 +787,20 @@ int CServer::NewClientCallback(int ClientID, void *pUser)
 	pThis->m_aClients[ClientID].m_State = CClient::STATE_AUTH;
 	pThis->m_aClients[ClientID].m_aName[0] = 0;
 	pThis->m_aClients[ClientID].m_aClan[0] = 0;
+
 	pThis->m_aClients[ClientID].m_Country = -1;
 	pThis->m_aClients[ClientID].m_Authed = AUTHED_NO;
 	pThis->m_aClients[ClientID].m_AuthTries = 0;
 	pThis->m_aClients[ClientID].m_pRconCmdToSend = 0;
+
+        //oMod
+	pThis->m_aClients[ClientID].m_OnlineID = 0; 
+	pThis->m_aClients[ClientID].m_Username [0] = 0;
+	pThis->m_aClients[ClientID].m_Clan [0] = 0;
+	pThis->m_aClients[ClientID].m_StartTime [0] = 0; 
+	pThis->m_aClients[ClientID].m_Rank = 0; 
+	pThis->m_aClients[ClientID].m_Infractions = 0;
+	pThis->m_aClients[ClientID].m_Registered = 0;
 	pThis->m_aClients[ClientID].Reset();
 	return 0;
 }
@@ -729,8 +812,19 @@ int CServer::DelClientCallback(int ClientID, const char *pReason, void *pUser)
 	char aAddrStr[NETADDR_MAXSTRSIZE];
 	net_addr_str(pThis->m_NetServer.ClientAddr(ClientID), aAddrStr, sizeof(aAddrStr), true);
 	char aBuf[256];
-	str_format(aBuf, sizeof(aBuf), "client dropped. cid=%d addr=%s reason='%s'", ClientID, aAddrStr,	pReason);
-	pThis->Console()->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "server", aBuf);
+	str_format (aBuf, sizeof (aBuf), "%s Dropped. addr = %s, Reason = '%s'", pThis->m_aClients[ClientID].m_aName, aAddrStr, pReason);
+
+        //oMod
+	if (pThis->m_aClients[ClientID].m_OnlineID && pThis->m_aClients[ClientID].m_StartTime [0]){
+		SendTime timeStruct;
+		timeStruct.OnlineID = pThis->m_aClients[ClientID].m_OnlineID;
+		timeStruct.Date = pThis->m_aClients[ClientID].m_StartTime;
+		pThis->m_DBConnector->SendMessage (NET_SENDTIME, timeStruct);
+		
+	}
+	pThis->SendPLog (pThis->m_aClients[ClientID].m_OnlineID, "Dropped", pThis->m_aClients[ClientID].m_aName, aBuf); 
+   
+	pThis->Console ()->Print (IConsole::OUTPUT_LEVEL_STANDARD, "server", aBuf);
 
 	// notify the mod about the drop
 	if(pThis->m_aClients[ClientID].m_State >= CClient::STATE_READY)
@@ -740,11 +834,19 @@ int CServer::DelClientCallback(int ClientID, const char *pReason, void *pUser)
 	pThis->m_aClients[ClientID].m_aName[0] = 0;
 	pThis->m_aClients[ClientID].m_aClan[0] = 0;
 	pThis->m_aClients[ClientID].m_Country = -1;
+	pThis->m_aClients[ClientID].m_OnlineID = 0; 
+	pThis->m_aClients[ClientID].m_Username [0] = 0;
+	pThis->m_aClients[ClientID].m_Clan [0] = 0;
+	pThis->m_aClients[ClientID].m_StartTime [0] =0;
+	pThis->m_aClients[ClientID].m_Rank = 0;
+	pThis->m_aClients[ClientID].m_Infractions = 0;
+	pThis->m_aClients[ClientID].m_Registered = 0;
 	pThis->m_aClients[ClientID].m_Authed = AUTHED_NO;
 	pThis->m_aClients[ClientID].m_AuthTries = 0;
 	pThis->m_aClients[ClientID].m_pRconCmdToSend = 0;
 	pThis->m_aPrevStates[ClientID] = CClient::STATE_EMPTY;
 	pThis->m_aClients[ClientID].m_Snapshots.PurgeAll();
+
 	return 0;
 }
 
@@ -847,6 +949,12 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
 		{
 			if(m_aClients[ClientID].m_State == CClient::STATE_AUTH)
 			{
+				CheckAddressBan addressBanStruct;
+				char aAddrStr[NETADDR_MAXSTRSIZE];
+				net_addr_str(m_NetServer.ClientAddr(ClientID), aAddrStr, sizeof(aAddrStr), false);
+				addressBanStruct.Address = aAddrStr;
+				m_DBConnector->SendMessage (NET_CHECKADDRESSBAN, addressBanStruct);
+
 				const char *pVersion = Unpacker.GetString(CUnpacker::SANITIZE_CC);
 				if(str_comp(pVersion, GameServer()->NetVersion()) != 0)
 				{
@@ -872,6 +980,8 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
 					return;
 				}
 
+				//oMod
+				RequestAuth (ClientID);
 				m_aClients[ClientID].m_State = CClient::STATE_CONNECTING;
 				SendMap(ClientID);
 			}
@@ -937,6 +1047,8 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
 				GameServer()->OnClientConnected(ClientID);
 				SendConnectionReady(ClientID);
 			}
+			else if (m_aClients[ClientID].m_State == CClient::STATE_AUTHENICATING)
+				m_aClients[ClientID].m_State = CClient::STATE_READY;
 		}
 		else if(Msg == NETMSG_ENTERGAME)
 		{
@@ -944,9 +1056,9 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
 			{
 				char aAddrStr[NETADDR_MAXSTRSIZE];
 				net_addr_str(m_NetServer.ClientAddr(ClientID), aAddrStr, sizeof(aAddrStr), true);
-
 				char aBuf[256];
-				str_format(aBuf, sizeof(aBuf), "player has entered the game. ClientID=%x addr=%s", ClientID, aAddrStr);
+				str_format(aBuf, sizeof(aBuf), "'%s' has entered the game. ClientID=%x addr=%s", m_aClients[ClientID].m_aName, ClientID, aAddrStr);
+				SendPLog (m_aClients [ClientID].m_OnlineID,  "Enter",  m_aClients[ClientID].m_aName, aBuf);
 				Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "server", aBuf);
 				m_aClients[ClientID].m_State = CClient::STATE_INGAME;
 				GameServer()->OnClientEnter(ClientID);
@@ -1099,6 +1211,17 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
 			CMsgPacker Msg(NETMSG_PING_REPLY);
 			SendMsgEx(&Msg, 0, ClientID, true);
 		}
+		else if(Msg == NETMSG_VERIFY)//oMod Verification System
+		{	
+			if(Unpacker.Error() == 0){
+				
+				ClientDetailsRequest requestStruct;
+				requestStruct.HashKey = Unpacker.GetString();
+				requestStruct.ClientID = ClientID;		
+				m_aClients[ClientID].m_State = CClient::STATE_AUTHENICATING;
+				m_DBConnector->SendMessage (NET_CLIENTDETAILSREQ, requestStruct);
+			}
+		}
 		else
 		{
 			if(g_Config.m_Debug)
@@ -1156,6 +1279,9 @@ void CServer::SendServerInfo(const NETADDR *pAddr, int Token)
 
 	p.AddString(GameServer()->Version(), 32);
 	p.AddString(g_Config.m_SvName, 64);
+	if (g_Config.m_SvTournamentMode)
+		p.AddString("[HIDDEN]", 32);
+	else
 	p.AddString(GetMapName(), 32);
 
 	// gametype
@@ -1310,6 +1436,15 @@ int CServer::LoadMap(const char *pMapName)
 	if(!m_pMap->Load(aBuf))
 		return 0;
 
+	//oMod
+	if (m_DBConnector)
+		SendSLog ("New-Map", pMapName);
+	Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "New-Map", pMapName);
+
+	MapDetailsRequest mRequestStruct;
+	mRequestStruct.MapName = pMapName;
+	m_DBConnector->SendMessage (NET_MAPDETAILSREQ, mRequestStruct);
+
 	// stop recording when we change map
 	m_DemoRecorder.Stop();
 
@@ -1385,11 +1520,11 @@ int CServer::Run()
 
 	char aBuf[256];
 	str_format(aBuf, sizeof(aBuf), "server name is '%s'", g_Config.m_SvName);
-	Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "server", aBuf);
+	Console()->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "server", aBuf);
 
 	GameServer()->OnInit();
 	str_format(aBuf, sizeof(aBuf), "version %s", GameServer()->NetVersion());
-	Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "server", aBuf);
+	Console()->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "server", aBuf);
 
 	// process pending commands
 	m_pConsole->StoreCommands(false);
@@ -1469,6 +1604,7 @@ int CServer::Run()
 					}
 				}
 
+				m_DBConnector->OnTick();
 				GameServer()->OnTick();
 			}
 
@@ -1518,6 +1654,14 @@ int CServer::Run()
 	// disconnect all clients on shutdown
 	for(int i = 0; i < MAX_CLIENTS; ++i)
 	{
+		//oMod
+		if (m_aClients[i].m_OnlineID && m_aClients[i].m_StartTime [0]){
+			SendTime timeStruct;
+			timeStruct.OnlineID = m_aClients[i].m_OnlineID;
+			timeStruct.Date = m_aClients[i].m_StartTime;
+			m_aClients[i].m_StartTime [0] = 0;
+			m_DBConnector->SendMessage (NET_SENDTIME, timeStruct);
+		}
 		if(m_aClients[i].m_State != CClient::STATE_EMPTY)
 			m_NetServer.Drop(i, "Server shutdown");
 
@@ -1712,6 +1856,13 @@ void CServer::RegisterCommands()
 
 	Console()->Register("reload", "", CFGFLAG_SERVER, ConMapReload, this, "Reload the map");
 
+	//oMod
+	Console()->Register("connect", "si", CFGFLAG_SERVER, ConConnect, this, "Connect to master server");
+	Console()->Register("map_min", "i", CFGFLAG_SERVER, ConMapMin, this, "Sets the maps minimum");
+	Console()->Register("filter", "w", CFGFLAG_SERVER, ConAddWord, this, "Add word to the filter");
+	Console()->Register("admin_filter", "w", CFGFLAG_SERVER, ConAddIdentifier, this, "Add word to the admin identifier filter");
+	Console()->Register("username", "i", CFGFLAG_SERVER, ConGetUsername, this, "Get user's username");
+
 	Console()->Chain("sv_name", ConchainSpecialInfoupdate, this);
 	Console()->Chain("password", ConchainSpecialInfoupdate, this);
 
@@ -1819,6 +1970,24 @@ int main(int argc, const char **argv) // ignore_convention
 	dbg_msg("server", "starting...");
 	pServer->Run();
 
+	
+	//oMod Freeing up
+	CWordList *listS= pServer->m_lastSWord;
+	while(listS){
+		CWordList *temp = listS->m_pPrev;
+		delete listS;
+		listS = temp;
+	}
+
+	CWordList *listI= pServer->m_lastIWord;
+	while(listI){
+		CWordList *temp = listI->m_pPrev;
+		delete listI;
+		listI = temp;
+	}
+	pServer->m_DBConnector->ThreadSleep ();
+	delete pServer->m_DBConnector;
+
 	// free
 	delete pServer;
 	delete pKernel;
@@ -1876,3 +2045,314 @@ char *CServer::GetAnnouncementLine(char const *pFileName)
 	return 0;
 }
 
+//oMod
+void CServer::ImportedCommands (const char* ServerName, const char* Commands, int LogID){
+	char aBuf [64];
+	str_format (aBuf, sizeof (aBuf), "sv_name %s", ServerName);
+	Console()->ExecuteLine (aBuf);
+	int pos = 0;
+
+	while (*Commands){
+		if (*Commands == '\n'){
+			aBuf [pos] = 0;
+			Console()->ExecuteLine (aBuf);
+			pos = 0;
+		}
+		else{
+			aBuf [pos] = *Commands;
+			pos++;
+		}
+		Commands++;
+	}
+	char Date [32];
+	FetchDate (Date, sizeof (Date), true);
+	str_format (aBuf, sizeof (aBuf), "logfile %d_%s.txt", LogID, Date);
+	SendSLog ("Start-Up", "Server starting up.");
+	Console()->ExecuteLine (aBuf);
+}
+
+void CServer::SetClientOnlineDetails (int OnlineID, int ClientID, int Auth, const char * Username, const char * Clan, int Rank, bool Registered, int Infractions){
+	
+	if(ClientID < 0 || ClientID >= MAX_CLIENTS)
+		return;
+
+	if (m_aClients[ClientID].m_State == CClient::STATE_READY){
+		char aAddrStr[NETADDR_MAXSTRSIZE];
+		net_addr_str(m_NetServer.ClientAddr(ClientID), aAddrStr, sizeof(aAddrStr), true);
+		
+		char aBuf[256];
+		str_format(aBuf, sizeof(aBuf), "player is ready. ClientID=%x addr=%s", ClientID, aAddrStr);
+		Console()->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "server", aBuf);
+		GameServer()->OnClientConnected(ClientID);
+		SendConnectionReady(ClientID);
+	}
+	else if (m_aClients[ClientID].m_State == CClient::STATE_AUTHENICATING)
+		m_aClients[ClientID].m_State =  CClient::STATE_CONNECTING;
+
+	m_aClients[ClientID].m_OnlineID = OnlineID;
+	m_aClients[ClientID].m_Authed = Auth;
+	str_copy(m_aClients[ClientID].m_Username, Username, MAX_NAME_LENGTH);
+	m_aClients[ClientID].m_Rank = Rank;
+	m_aClients[ClientID].m_Registered = Registered;
+	m_aClients[ClientID].m_Infractions = Infractions;
+	str_copy(m_aClients[ClientID].m_Clan, Clan, MAX_CLAN_LENGTH);
+	FetchDate (m_aClients[ClientID].m_StartTime, sizeof (m_aClients[ClientID].m_StartTime), false);
+	//if (!m_aClients[ClientID].m_pName [0] == 0)
+	// Remove G
+}
+
+void CServer::PlayersRank (int ClientID, int Rank){
+	if(ClientID < 0 || ClientID >= MAX_CLIENTS || m_aClients[ClientID].m_State < CClient::STATE_READY)
+		return;
+
+	m_aClients[ClientID].m_Rank = Rank;
+	char aBuf [36];
+	str_format (aBuf, sizeof (aBuf), "say_target %d \"You are ranked: %d\"", ClientID, Rank);
+	Console()->ExecuteLine (aBuf);
+}
+
+
+void CServer::SendPLog (int OnlineID, const char *Category, const char * Name, const char * Text){
+	PlayerLog pLog;
+	pLog.OnlineID = OnlineID;
+	pLog.Category = Category;
+	pLog.Name = Name;
+	pLog.Text = Text;
+	m_DBConnector->SendMessage (NET_PLAYERLOG, pLog);
+}
+
+void CServer::SendSLog (const char *Category, const char * Text){
+	ServerLog sLog;
+	sLog.Category = Category;
+	sLog.Text = Text;
+	m_DBConnector->SendMessage (NET_SERVERLOG, sLog);
+}
+
+void CServer::SendCommendation (int ClientID, int CommendID){
+	CommendationReq commendReqStruct;
+	commendReqStruct.OnlineID = m_aClients[ClientID].m_OnlineID;
+	commendReqStruct.ClientID = ClientID;
+	commendReqStruct.CommendID = CommendID;
+	m_DBConnector->SendMessage (NET_COMMENDATIONREQ, commendReqStruct);
+}
+
+void CServer::SendAdminNotification (int OnlineID, const char * Username, const char * Reason){
+	AdminNotification notificStruct;
+	notificStruct.OnlineID = OnlineID;
+	notificStruct.GameName = Username;
+	notificStruct.Reason = Reason;
+
+	m_DBConnector->SendMessage (NET_ADMINNOTIFICATION, notificStruct);
+}
+
+void CServer::GetRank (int ClientID){
+	FetchRank rankStruct;
+	rankStruct.ClientID = ClientID;
+	rankStruct.OnlineID = m_aClients[ClientID].m_OnlineID;
+
+	m_DBConnector->SendMessage (NET_FETCHRANK, rankStruct);
+}
+
+void CServer::SendBug (int OnlineID, const char * Report){
+	BugReport reportStruct;
+	reportStruct.OnlineID = OnlineID;
+	reportStruct.Report = Report;
+
+	m_DBConnector->SendMessage (NET_BUGREPORT, reportStruct);
+}
+
+void CServer::SendRating (int ClientID, int Score){
+	PlayerRating ratingStruct;
+	ratingStruct.ClientID = ClientID;
+	ratingStruct.Score = Score;
+	ratingStruct.OnlineID = m_aClients[ClientID].m_OnlineID;
+
+	m_DBConnector->SendMessage (NET_PLAYERRATING, ratingStruct);
+}
+
+void CServer::AddRecord (int OnlineID, float Time, bool MapChallenge){
+	MapRecord recordStruct;
+	recordStruct.OnlineID = OnlineID;
+	recordStruct.Time = Time;
+	recordStruct.MapChallenge = MapChallenge;
+
+	m_DBConnector->SendMessage (NET_MAPRECORD, recordStruct);
+}
+
+void CServer::SendSave (SaveRun Details){
+	m_DBConnector->SendMessage (NET_SAVEDETAILS, Details);
+}
+
+void CServer::FetchSave (int ClientID, const int *OnlineIDs, int Size){
+	std::vector <int> tempDetails;
+	tempDetails.assign (OnlineIDs, OnlineIDs + Size);
+
+	FetchRun pDetails;
+	pDetails.OnlineIDs = tempDetails;
+	pDetails.ClientID = ClientID;
+
+	std::cout << pDetails.ClientID << std::endl;
+	m_DBConnector->SendMessage (NET_FETCHRUN, pDetails);
+}
+
+void CServer::LoadSave (LoadRun Details){
+	GameServer ()->LoadPlayers (Details);
+}
+
+void CServer::RequestAuth(int ClientID){
+	CMsgPacker Msg(NETMSG_REQUEST_AUTH);
+	SendMsgEx(&Msg, MSGFLAG_VITAL|MSGFLAG_FLUSH, ClientID, true);
+}
+
+bool CServer::isGuest(int ClientID)
+{
+	if (m_aClients[ClientID].m_Authed < AUTHED_TRIAL)
+		return true;
+	else
+		return false;
+}
+
+bool CServer::isTrial(int ClientID)
+{
+	if (m_aClients[ClientID].m_Authed == AUTHED_TRIAL)
+		return true;
+	else
+		return false;
+}
+bool CServer::isVeteran(int ClientID)
+{
+	if (m_aClients[ClientID].m_Authed >= AUTHED_VETERAN)
+		return true;
+	else
+		return false;
+}
+
+void CServer::ReplaceWords (char *pMsgIn, char replaceWith, bool incPunct){
+	CWordList *listIn;
+	if (incPunct)
+		listIn = m_lastIWord;
+	else
+		listIn = m_lastSWord;
+
+	while(listIn){
+		char* selected = pMsgIn;
+		int length;
+		while (*selected){
+			while(*selected){
+				char*a = selected;
+				const char *b = (const char*) listIn->m_aWord;
+				length = 0;
+				while(*a && *b && tolower(*a) == tolower(*b)){
+					a++;
+					b++;
+					length++;
+					while (!incPunct && *a && *b && (ispunct (*a) || *a == ' ')){
+						a++;
+						length++;
+					}
+				}
+				if(!(*b))
+					break;
+				selected++;
+			}
+
+			while (*selected && length ){
+				*selected = replaceWith;
+				length--;
+				selected++;
+			}
+		}
+		listIn = listIn->m_pPrev;
+	}
+}
+
+int CServer::GetOnlineID (int ClientID){
+	if(ClientID < 0 || ClientID >= MAX_CLIENTS || m_aClients[ClientID].m_State == CClient::STATE_EMPTY)	{
+		Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "server", "invalid client id");
+		return 0;
+	}
+
+	return m_aClients[ClientID].m_OnlineID;
+}
+
+int CServer::GetMapMin (){
+	return m_MapMin;
+}
+
+int CServer::GetClientsRank (int ClientID){
+	return m_aClients[ClientID].m_Rank;
+}
+int CServer::GetRegistered (int ClientID){
+	return m_aClients[ClientID].m_Registered;
+}
+
+void CServer::ConConnect (IConsole::IResult *pResult, void *pUser){
+	if (pResult->NumArguments() > 0 && pResult->GetString (0) && pResult->GetInteger (1)){
+		CServer *pSelf = (CServer *)pUser;
+
+		char aBuf [64];
+		str_format (aBuf, sizeof (aBuf), "sv_port %d", pResult->GetInteger (1));
+		pSelf->Console ()->ExecuteLine (aBuf);
+		 
+		pSelf->m_DBConnector = new DBConnector (pSelf, pSelf ->Console ());
+		ServerStart startStruct;
+		startStruct.Address = pResult->GetString (0);
+		startStruct.Port = pResult->GetInteger (1);
+		pSelf->m_DBConnector->SendMessage (NET_SERVERSTART, startStruct);
+		pSelf->m_DBConnector->ThreadSleep ();
+	}
+}
+
+void CServer::ConMapMin (IConsole::IResult *pResult, void *pUser){
+	if(pResult->NumArguments())
+		((CServer *)pUser)->m_MapMin = pResult->GetInteger(0);
+}
+
+
+void CServer::ConAddWord (IConsole::IResult *pResult, void *pUser)
+{//Adding words to the swear words filter
+	if(pResult->NumArguments() > 0 && *pResult->GetString (0)){
+		CWordList *newWord = new CWordList;
+		newWord->m_pPrev = ((CServer *)pUser)->m_lastSWord;
+		((CServer *)pUser)->m_lastSWord = newWord;
+		str_copy(newWord->m_aWord, pResult->GetString (0), sizeof(newWord->m_aWord));
+	}
+} 
+
+
+void CServer::ConAddIdentifier(IConsole::IResult *pResult, void *pUser)
+{//Adding words to the admin identifier filter
+	if(pResult->NumArguments() > 0 && *pResult->GetString (0)){
+		CWordList *newWord = new CWordList;
+		newWord->m_pPrev = ((CServer *)pUser)->m_lastIWord;
+		((CServer *)pUser)->m_lastIWord = newWord;
+		str_copy(newWord->m_aWord, pResult->GetString (0), sizeof(newWord->m_aWord));
+	}
+}
+
+void  CServer::ConGetUsername (IConsole::IResult *pResult, void *pUserData)
+{
+	if(pResult->NumArguments() > 0 ){
+		CServer *pSelf = (CServer *)pUserData;
+
+		if (pSelf->GetOnlineID (pResult->GetInteger(0))){
+			char aBuf[32];
+			str_format(aBuf, sizeof(aBuf), "Username - %s", pSelf->m_aClients [pResult->GetInteger(0)].m_Username);
+			pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "server", aBuf);
+		}
+		else
+			pSelf->Console()->Print(IConsole::OUTPUT_LEVEL_STANDARD, "server", "Unregistered");
+	}
+}
+
+void  CServer::RemoveG (IConsole::IResult *pResult, void *pUserData){
+	if (pResult->NumArguments () > 0){
+		CServer *pSelf = (CServer *)pUserData;
+		int ClientID = pResult->GetInteger (0);
+		if (pSelf->m_aClients[ClientID].m_aName [0] && !str_comp_num(pSelf->m_aClients[ClientID].m_aName, "[G]", 3)){
+			char * NewName = pSelf->m_aClients[ClientID].m_aName;
+			NewName+=3;
+			pSelf->TrySetClientName (ClientID, NewName);
+		}
+	}
+}

@@ -219,7 +219,9 @@ void CConsole::SetPrintOutputLevel(int Index, int OutputLevel)
 
 void CConsole::Print(int Level, const char *pFrom, const char *pStr)
 {
+	if (Level <= m_aPrintCB[0].m_OutputLevel)
 	dbg_msg(pFrom ,"%s", pStr);
+
 	for(int i = 0; i < m_NumPrintCB; ++i)
 	{
 		if(Level <= m_aPrintCB[i].m_OutputLevel && m_aPrintCB[i].m_pfnPrintCallback)
@@ -476,7 +478,7 @@ void CConsole::ExecuteFile(const char *pFilename, int ClientID)
 	else
 	{
 		str_format(aBuf, sizeof(aBuf), "failed to open '%s'", pFilename);
-		Print(IConsole::OUTPUT_LEVEL_STANDARD, "console", aBuf);
+		Print(IConsole::OUTPUT_LEVEL_ADDINFO, "console", aBuf);
 	}
 
 	m_pFirstExec = pPrev;
