@@ -22,7 +22,6 @@
 #include "binds.h"
 #include "countryflags.h"
 #include "menus.h"
-#include "skins.h"
 
 CMenusKeyBinder CMenus::m_Binder;
 
@@ -132,6 +131,9 @@ void CMenus::SaveSkinfile()
 	io_write(File, p, str_length(p));
 
 	io_close(File);
+
+	// add new skin to the skin list
+	m_pClient->m_pSkins->AddSkin(m_aSaveSkinName);
 }
 
 void CMenus::RenderHSLPicker(CUIRect MainView)
@@ -186,21 +188,42 @@ void CMenus::RenderHSLPicker(CUIRect MainView)
 		// picker
 		Graphics()->TextureClear();
 		Graphics()->QuadsBegin();
-		vec3 c = HslToRgb(vec3(Hue/255.0f, 0.0f, Dark));
+
+		// base: grey - hue
+		vec3 c = HslToRgb(vec3(Hue/255.0f, 0.0f, 0.5f));
 		ColorArray[0] = IGraphics::CColorVertex(0, c.r, c.g, c.b, 1.0f);
-		c = HslToRgb(vec3(Hue/255.0f, 1.0f, Dark));
+		c = HslToRgb(vec3(Hue/255.0f, 1.0f, 0.5f));
 		ColorArray[1] = IGraphics::CColorVertex(1, c.r, c.g, c.b, 1.0f);
-		c = HslToRgb(vec3(Hue/255.0f, 1.0f, Dark+(1.0f-Dark)));
+		c = HslToRgb(vec3(Hue/255.0f, 1.0f, 0.5f));
 		ColorArray[2] = IGraphics::CColorVertex(2, c.r, c.g, c.b, 1.0f);
-		c = HslToRgb(vec3(Hue/255.0f, 0.0f, Dark+(1.0f-Dark)));
+		c = HslToRgb(vec3(Hue/255.0f, 0.0f, 0.5f));
 		ColorArray[3] = IGraphics::CColorVertex(3, c.r, c.g, c.b, 1.0f);
 		Graphics()->SetColorVertex(ColorArray, 4);
 		IGraphics::CQuadItem QuadItem(Picker.x, Picker.y, Picker.w, Picker.h);
 		Graphics()->QuadsDrawTL(&QuadItem, 1);
+
+		// white blending
+		ColorArray[0] = IGraphics::CColorVertex(0, 1.0f, 1.0f, 1.0f, 0.0f);
+		ColorArray[1] = IGraphics::CColorVertex(1, 1.0f, 1.0f, 1.0f, 0.0f);
+		ColorArray[2] = IGraphics::CColorVertex(2, 1.0f, 1.0f, 1.0f, 1.0f);
+		ColorArray[3] = IGraphics::CColorVertex(3, 1.0f, 1.0f, 1.0f, 1.0f);
+		Graphics()->SetColorVertex(ColorArray, 4);
+		IGraphics::CQuadItem WhiteGradient(Picker.x, Picker.y + Picker.h*(1-2*Dark)/((1-Dark)*2), Picker.w, Picker.h/((1-Dark)*2));
+		Graphics()->QuadsDrawTL(&WhiteGradient, 1);
+
+		// black blending
+		ColorArray[0] = IGraphics::CColorVertex(0, 0.0f, 0.0f, 0.0f, 1.0f-2*Dark);
+		ColorArray[1] = IGraphics::CColorVertex(1, 0.0f, 0.0f, 0.0f, 1.0f-2*Dark);
+		ColorArray[2] = IGraphics::CColorVertex(2, 0.0f, 0.0f, 0.0f, 0.0f);
+		ColorArray[3] = IGraphics::CColorVertex(3, 0.0f, 0.0f, 0.0f, 0.0f);
+		Graphics()->SetColorVertex(ColorArray, 4);
+		IGraphics::CQuadItem BlackGradient(Picker.x, Picker.y, Picker.w, Picker.h*(1-2*Dark)/((1-Dark)*2));
+		Graphics()->QuadsDrawTL(&BlackGradient, 1);
+
 		Graphics()->QuadsEnd();
 
 		// marker
-		vec2 Marker = vec2(Sat/2*UI()->Scale(), Lgt/2.0f*UI()->Scale());
+		vec2 Marker = vec2(Sat/2.0f*UI()->Scale(), Lgt/2.0f*UI()->Scale());
 		Graphics()->TextureClear();
 		Graphics()->QuadsBegin();
 		Graphics()->SetColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -213,11 +236,10 @@ void CMenus::RenderHSLPicker(CUIRect MainView)
 		// logic
 		float X, Y;
 		static int s_HLPicker;
-		int Logic = UI()->DoPickerLogic(&s_HLPicker, &Picker, &X, &Y);
-		if(Logic)
+		if(UI()->DoPickerLogic(&s_HLPicker, &Picker, &X, &Y))
 		{
-			Sat = (int)(2*X) & 255;
-			Lgt = (int)(Y*2) & 255;
+			Sat = (int)(255.0f*X/Picker.w);
+			Lgt = (int)(255.0f*Y/Picker.h);
 			Modified = true;
 		}
 	}
@@ -257,8 +279,16 @@ void CMenus::RenderHSLPicker(CUIRect MainView)
 
 			// bar
 			Bar.VSplitLeft(128.0f, &Bar, &Button);
-			int NumQuads = i == 0 ? 6 : 1;
+			int NumQuads = 1;
+			if( i == 0)
+				NumQuads = 6;
+			else if ( i == 2)
+				NumQuads = 2;
+			else
+				NumQuads = 1;
+
 			float Length = Bar.w/NumQuads;
+			float Offset = Length;
 			vec4 ColorL, ColorR;
 
 			Graphics()->TextureClear();
@@ -267,13 +297,13 @@ void CMenus::RenderHSLPicker(CUIRect MainView)
 			{
 				switch(i)
 				{
-				case 0:
+				case 0: // Hue
 					{
 						ColorL = vec4(s_aColorIndices[j][0], s_aColorIndices[j][1], s_aColorIndices[j][2], 1.0f);
 						ColorR = vec4(s_aColorIndices[j+1][0], s_aColorIndices[j+1][1], s_aColorIndices[j+1][2], 1.0f);
 					}
 					break;
-				case 1:
+				case 1: // Sat
 					{
 						vec3 c = HslToRgb(vec3(Hue/255.0f, 0.0f, Dark+Lgt/255.0f*(1.0f-Dark)));
 						ColorL = vec4(c.r, c.g, c.b, 1.0f);
@@ -281,15 +311,29 @@ void CMenus::RenderHSLPicker(CUIRect MainView)
 						ColorR = vec4(c.r, c.g, c.b, 1.0f);
 					}
 					break;
-				case 2:
+				case 2: // Lgt
 					{
-						vec3 c = HslToRgb(vec3(Hue/255.0f, Sat/255.0f, Dark));
-						ColorL = vec4(c.r, c.g, c.b, 1.0f);
-						c = HslToRgb(vec3(Hue/255.0f, Sat/255.0f, Dark+(1.0f-Dark)));
-						ColorR = vec4(c.r, c.g, c.b, 1.0f);
+						if(j == 0)
+						{
+							// Dark - 0.5f
+							vec3 c = HslToRgb(vec3(Hue/255.0f, Sat/255.0f, Dark));
+							ColorL = vec4(c.r, c.g, c.b, 1.0f);
+							c = HslToRgb(vec3(Hue/255.0f, Sat/255.0f, 0.5f));
+							ColorR = vec4(c.r, c.g, c.b, 1.0f);
+							Length = Offset = Bar.w - Bar.w/((1-Dark)*2);
+						}
+						else
+						{
+							// 0.5f - 0.0f
+							vec3 c = HslToRgb(vec3(Hue/255.0f, Sat/255.0f, 0.5f));
+							ColorL = vec4(c.r, c.g, c.b, 1.0f);
+							c = HslToRgb(vec3(Hue/255.0f, Sat/255.0f, 1.0f));
+							ColorR = vec4(c.r, c.g, c.b, 1.0f);
+							Length = Bar.w/((1-Dark)*2);
+						}
 					}
 					break;
-				default:
+				default: // Alpha
 					{
 						vec3 c = HslToRgb(vec3(Hue/255.0f, Sat/255.0f, Dark+Lgt/255.0f*(1.0f-Dark)));
 						ColorL = vec4(c.r, c.g, c.b, 0.0f);
@@ -302,7 +346,7 @@ void CMenus::RenderHSLPicker(CUIRect MainView)
 				ColorArray[2] = IGraphics::CColorVertex(2, ColorR.r, ColorR.g, ColorR.b, ColorR.a);
 				ColorArray[3] = IGraphics::CColorVertex(3, ColorL.r, ColorL.g, ColorL.b, ColorL.a);
 				Graphics()->SetColorVertex(ColorArray, 4);
-				IGraphics::CQuadItem QuadItem(Bar.x+Length*j, Bar.y, Length, Bar.h);
+				IGraphics::CQuadItem QuadItem(Bar.x+Offset*j, Bar.y, Length, Bar.h);
 				Graphics()->QuadsDrawTL(&QuadItem, 1);
 			}
 
@@ -328,10 +372,9 @@ void CMenus::RenderHSLPicker(CUIRect MainView)
 
 			// logic
 			float X;
-			int Logic = UI()->DoPickerLogic(&s_aButtons[i*3+2], &Bar, &X, 0);
-			if(Logic)
+			if(UI()->DoPickerLogic(&s_aButtons[i*3+2], &Bar, &X, 0))
 			{
-				*apVars[i] = X*2;
+				*apVars[i] = X*255.0f/Bar.w;
 				Modified = true;
 			}
 		}
@@ -352,25 +395,25 @@ void CMenus::RenderHSLPicker(CUIRect MainView)
 
 void CMenus::RenderSkinSelection(CUIRect MainView)
 {
-	static bool s_InitSkinlist = true;
 	static sorted_array<const CSkins::CSkin *> s_paSkinList;
 	static float s_ScrollValue = 0.0f;
-	if(s_InitSkinlist)
+	if(m_RefreshSkinSelector)
 	{
 		s_paSkinList.clear();
 		for(int i = 0; i < m_pClient->m_pSkins->Num(); ++i)
 		{
 			const CSkins::CSkin *s = m_pClient->m_pSkins->Get(i);
 			// no special skins
-			if(s->m_Type == CSkins::SKINTYPE_STANDARD)
+			if((s->m_Flags&CSkins::SKINFLAG_SPECIAL) == 0)
 				s_paSkinList.add(s);
 		}
-		s_InitSkinlist = false;
+		m_RefreshSkinSelector = false;
 	}
 
+	m_pSelectedSkin = 0;
 	int OldSelected = -1;
 	UiDoListboxHeader(&MainView, Localize("Skins"), 20.0f, 2.0f);
-	UiDoListboxStart(&s_InitSkinlist, 50.0f, 0, s_paSkinList.size(), 10, OldSelected, s_ScrollValue);
+	UiDoListboxStart(&m_RefreshSkinSelector, 50.0f, 0, s_paSkinList.size(), 10, OldSelected, s_ScrollValue);
 
 	for(int i = 0; i < s_paSkinList.size(); ++i)
 	{
@@ -378,7 +421,10 @@ void CMenus::RenderSkinSelection(CUIRect MainView)
 		if(s == 0)
 			continue;
 		if(!str_comp(s->m_aName, g_Config.m_PlayerSkin))
+		{
+			m_pSelectedSkin = s;
 			OldSelected = i;
+		}
 
 		CListboxItem Item = UiDoListboxNextItem(&s_paSkinList[i], OldSelected == i);
 		if(Item.m_Visible)
@@ -409,13 +455,13 @@ void CMenus::RenderSkinSelection(CUIRect MainView)
 	{
 		if(NewSelected != OldSelected)
 		{
-			const CSkins::CSkin *s = s_paSkinList[NewSelected];
-			mem_copy(g_Config.m_PlayerSkin, s->m_aName, sizeof(g_Config.m_PlayerSkin));
+			m_pSelectedSkin = s_paSkinList[NewSelected];
+			mem_copy(g_Config.m_PlayerSkin, m_pSelectedSkin->m_aName, sizeof(g_Config.m_PlayerSkin));
 			for(int p = 0; p < CSkins::NUM_SKINPARTS; p++)
 			{
-				mem_copy(CSkins::ms_apSkinVariables[p], s->m_apParts[p]->m_aName, 24);
-				*CSkins::ms_apUCCVariables[p] = s->m_aUseCustomColors[p];
-				*CSkins::ms_apColorVariables[p] = s->m_aPartColors[p];
+				mem_copy(CSkins::ms_apSkinVariables[p], m_pSelectedSkin->m_apParts[p]->m_aName, 24);
+				*CSkins::ms_apUCCVariables[p] = m_pSelectedSkin->m_aUseCustomColors[p];
+				*CSkins::ms_apColorVariables[p] = m_pSelectedSkin->m_aPartColors[p];
 			}
 		}
 	}
@@ -436,7 +482,7 @@ void CMenus::RenderSkinPartSelection(CUIRect MainView)
 			{
 				const CSkins::CSkinPart *s = m_pClient->m_pSkins->GetSkinPart(p, i);
 				// no special skins
-				if(s->m_Type == CSkins::SKINTYPE_STANDARD)
+				if((s->m_Flags&CSkins::SKINFLAG_SPECIAL) == 0)
 					s_paList[p].add(s);
 			}
 		}
@@ -493,6 +539,7 @@ void CMenus::RenderSkinPartSelection(CUIRect MainView)
 		{
 			const CSkins::CSkinPart *s = s_paList[m_TeePartSelected][NewSelected];
 			mem_copy(CSkins::ms_apSkinVariables[m_TeePartSelected], s->m_aName, 24);
+			g_Config.m_PlayerSkin[0] = 0;
 		}
 	}
 	OldSelected = NewSelected;
@@ -1031,7 +1078,7 @@ void CMenus::RenderSettingsTee(CUIRect MainView)
 
 	// bottom button
 	float ButtonWidth = (BottomView.w/6.0f)-(SpacingW*5.0)/6.0f;
-	float BackgroundWidth = s_CustomSkinMenu ? ButtonWidth*2.0f+SpacingW : ButtonWidth;
+	float BackgroundWidth = s_CustomSkinMenu||(m_pSelectedSkin && (m_pSelectedSkin->m_Flags&CSkins::SKINFLAG_STANDARD) == 0) ? ButtonWidth*2.0f+SpacingW : ButtonWidth;
 
 	BottomView.VSplitRight(BackgroundWidth, 0, &BottomView);
 	RenderTools()->DrawUIRect4(&BottomView, vec4(0.0f, 0.0f, 0.0f, 0.25f), vec4(0.0f, 0.0f, 0.0f, 0.25f), vec4(0.0f, 0.0f, 0.0f, 0.0f), vec4(0.0f, 0.0f, 0.0f, 0.0f), CUI::CORNER_T, 5.0f);
@@ -1043,6 +1090,14 @@ void CMenus::RenderSettingsTee(CUIRect MainView)
 		static int s_CustomSkinSaveButton=0;
 		if(DoButton_Menu(&s_CustomSkinSaveButton, Localize("Save"), 0, &Button))
 			m_Popup = POPUP_SAVE_SKIN;
+		BottomView.VSplitLeft(SpacingW, 0, &BottomView);
+	}
+	else if(m_pSelectedSkin && (m_pSelectedSkin->m_Flags&CSkins::SKINFLAG_STANDARD) == 0)
+	{
+		BottomView.VSplitLeft(ButtonWidth, &Button, &BottomView);
+		static int s_CustomSkinSaveButton=0;
+		if(DoButton_Menu(&s_CustomSkinSaveButton, Localize("Delete"), 0, &Button))
+			m_Popup = POPUP_DELETE_SKIN;
 		BottomView.VSplitLeft(SpacingW, 0, &BottomView);
 	}
 
